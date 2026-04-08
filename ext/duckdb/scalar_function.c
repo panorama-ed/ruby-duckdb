@@ -716,14 +716,7 @@ static void vector_set_value_at(duckdb_vector vector, duckdb_logical_type elemen
             break;
         }
         case DUCKDB_TYPE_UUID: {
-            VALUE result = rb_funcall(mDuckDBConverter, id__uuid_string_to_hugeint, 1, value);
-            VALUE rb_lower = rb_ary_entry(result, 0);
-            VALUE rb_upper = rb_ary_entry(result, 1);
-
-            duckdb_hugeint hugeint;
-            hugeint.lower = NUM2ULL(rb_lower);
-            hugeint.upper = NUM2LL(rb_upper);
-            ((duckdb_hugeint *)vector_data)[index] = hugeint;
+            ((duckdb_hugeint *)vector_data)[index] = rbduckdb_uuid_from_ruby_string(value);
             break;
         }
         case DUCKDB_TYPE_DECIMAL: {

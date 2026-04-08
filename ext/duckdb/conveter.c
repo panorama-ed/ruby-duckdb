@@ -1,5 +1,7 @@
 #include "ruby-duckdb.h"
 
+#include <inttypes.h>
+
 VALUE mDuckDBConverter;
 
 ID id__to_date;
@@ -8,9 +10,6 @@ ID id__to_time_from_duckdb_time;
 ID id__to_interval_from_vector;
 ID id__to_hugeint_from_vector;
 ID id__to_decimal_from_hugeint;
-ID id__to_uuid_from_vector;
-ID id__to_uuid_from_uhugeint;
-ID id__uuid_string_to_hugeint;
 ID id__to_time_from_duckdb_timestamp_s;
 ID id__to_time_from_duckdb_timestamp_ms;
 ID id__to_time_from_duckdb_timestamp_ns;
@@ -19,6 +18,36 @@ ID id__to_time_from_duckdb_time_tz;
 ID id__to_time_from_duckdb_timestamp_tz;
 ID id__to_infinity;
 ID id__decimal_to_unscaled;
+
+static VALUE uuid_to_ruby_string(uint64_t upper, uint64_t lower) {
+    char uuid_str[37];
+
+    snprintf(
+        uuid_str,
+        sizeof(uuid_str),
+        "%08" PRIx64 "-%04" PRIx64 "-%04" PRIx64 "-%04" PRIx64 "-%012" PRIx64,
+        upper >> 32,
+        (upper >> 16) & UINT64_C(0xFFFF),
+        upper & UINT64_C(0xFFFF),
+        lower >> 48,
+        lower & UINT64_C(0xFFFFFFFFFFFF)
+    );
+
+    return rb_usascii_str_new(uuid_str, 36);
+}
+
+static int hex_char_to_int(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
 
 VALUE infinite_date_value(duckdb_date date) {
     if (duckdb_is_finite_date(date) == false) {
@@ -66,17 +95,52 @@ VALUE infinite_timestamp_ns_value(duckdb_timestamp_ns timestamp_ns) {
 }
 
 VALUE rbduckdb_uuid_to_ruby(duckdb_hugeint h) {
-    return rb_funcall(mDuckDBConverter, id__to_uuid_from_vector, 2,
-                      ULL2NUM(h.lower),
-                      LL2NUM(h.upper)
-                      );
+    return uuid_to_ruby_string((uint64_t)h.upper ^ 0x8000000000000000ULL, h.lower);
 }
 
 VALUE rbduckdb_uuid_uhugeint_to_ruby(duckdb_uhugeint h) {
-    return rb_funcall(mDuckDBConverter, id__to_uuid_from_uhugeint, 2,
-                      ULL2NUM(h.lower),
-                      ULL2NUM(h.upper)
-                      );
+    return uuid_to_ruby_string(h.upper, h.lower);
+}
+
+duckdb_hugeint rbduckdb_uuid_from_ruby_string(VALUE uuid) {
+    VALUE str = rb_obj_as_string(uuid);
+    const char *ptr = RSTRING_PTR(str);
+    long len = RSTRING_LEN(str);
+    uint64_t upper = 0;
+    uint64_t lower = 0;
+    int nibble_count = 0;
+    long i;
+    duckdb_hugeint hugeint;
+
+    for (i = 0; i < len; i++) {
+        int nibble;
+
+        if (ptr[i] == '-') {
+            continue;
+        }
+
+        nibble = hex_char_to_int(ptr[i]);
+        if (nibble < 0 || nibble_count >= 32) {
+            rb_raise(rb_eArgError, "Invalid UUID format: %"PRIsVALUE, rb_inspect(uuid));
+        }
+
+        if (nibble_count < 16) {
+            upper = (upper << 4) | (uint64_t)nibble;
+        } else {
+            lower = (lower << 4) | (uint64_t)nibble;
+        }
+        nibble_count++;
+    }
+
+    if (nibble_count != 32) {
+        rb_raise(rb_eArgError, "Invalid UUID format: %"PRIsVALUE, rb_inspect(uuid));
+    }
+
+    upper ^= 0x8000000000000000ULL;
+
+    hugeint.lower = lower;
+    hugeint.upper = (int64_t)upper;
+    return hugeint;
 }
 
 VALUE rbduckdb_interval_to_ruby(duckdb_interval i) {
@@ -205,9 +269,6 @@ void rbduckdb_init_duckdb_converter(void) {
     id__to_interval_from_vector = rb_intern("_to_interval_from_vector");
     id__to_hugeint_from_vector = rb_intern("_to_hugeint_from_vector");
     id__to_decimal_from_hugeint = rb_intern("_to_decimal_from_hugeint");
-    id__to_uuid_from_vector = rb_intern("_to_uuid_from_vector");
-    id__to_uuid_from_uhugeint = rb_intern("_to_uuid_from_uhugeint");
-    id__uuid_string_to_hugeint = rb_intern("_uuid_string_to_hugeint");
     id__to_time_from_duckdb_timestamp_s = rb_intern("_to_time_from_duckdb_timestamp_s");
     id__to_time_from_duckdb_timestamp_ms = rb_intern("_to_time_from_duckdb_timestamp_ms");
     id__to_time_from_duckdb_timestamp_ns = rb_intern("_to_time_from_duckdb_timestamp_ns");
